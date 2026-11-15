@@ -5,8 +5,13 @@ import { SAMPLE_DATASETS } from '@/src/features/csv-import/services/sampleDatase
 import { DashboardWorkspace } from '@/src/features/dashboard/components/DashboardWorkspace';
 import { useDashboardState } from '@/src/features/dashboard/hooks/useDashboardState';
 
-const UPLOAD_PATH = '/';
-const RESULT_PATH = '/result';
+// ハッシュ形式で画面を表す（#/result）。# 以降はサーバーに送られないため、
+// 静的ホスティングでもフォールバック設定なしで直接アクセス・リロードできる。
+const RESULT_HASH = '#/result';
+
+const isResultUrl = () => window.location.hash === RESULT_HASH;
+// アップロード画面の URL（ハッシュとクエリを外したパス）
+const uploadUrl = () => window.location.pathname;
 
 export function DashboardApp() {
   const {
@@ -53,26 +58,26 @@ export function DashboardApp() {
   }, [handleLoadSampleDataset]);
 
   // URL とデータセットの有無を同期する。
-  // 読み込み完了で /result へ進み、データが無い状態で /result にいれば / へ戻す
-  // （CSV はメモリ上にしか無いため、/result の直接アクセスやリロードでは復元できない）。
+  // 読み込み完了で #/result へ進み、データが無い状態で #/result にいれば / へ戻す
+  // （CSV はメモリ上にしか無いため、#/result の直接アクセスやリロードでは復元できない）。
   useEffect(() => {
-    const onResultPath = window.location.pathname === RESULT_PATH;
-    if (analysis && !onResultPath) {
-      window.history.pushState(null, '', RESULT_PATH);
-    } else if (!analysis && onResultPath) {
-      window.history.replaceState(null, '', UPLOAD_PATH);
+    const onResult = isResultUrl();
+    if (analysis && !onResult) {
+      window.history.pushState(null, '', RESULT_HASH);
+    } else if (!analysis && onResult) {
+      window.history.replaceState(null, '', uploadUrl());
     }
   }, [analysis]);
 
   // ブラウザの戻る/進むに追従する。
   useEffect(() => {
     const handlePopState = () => {
-      const onResultPath = window.location.pathname === RESULT_PATH;
-      if (!onResultPath && analysis) {
+      const onResult = isResultUrl();
+      if (!onResult && analysis) {
         setActiveTab('overview');
         void handleResetToUpload();
-      } else if (onResultPath && !analysis) {
-        window.history.replaceState(null, '', UPLOAD_PATH);
+      } else if (onResult && !analysis) {
+        window.history.replaceState(null, '', uploadUrl());
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -86,7 +91,7 @@ export function DashboardApp() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         onResetToUpload={() => {
-          window.history.pushState(null, '', UPLOAD_PATH);
+          window.history.pushState(null, '', uploadUrl());
           setActiveTab('overview');
           void handleResetToUpload();
         }}
