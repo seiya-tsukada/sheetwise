@@ -125,8 +125,23 @@ UIコンポーネント内にSQL文字列や分析ロジックを持たせず、
 
 Docker は Node.js および Vite 開発サーバーの実行環境を隔離するために利用します（CSV解析自体はブラウザ内の DuckDB-Wasm で実行されます）。
 
-- ソースコードはホスト側からコンテナの `/app` にマウントされるため、編集内容が即座に反映されます。
-- `node_modules` は Docker の名前付きボリューム（`node_modules`）で管理されます。
+- ソースコードはホスト側からコンテナの `/app` にマウントされるため、編集内容が即座に反映されます（`CHOKIDAR_USEPOLLING` によるポーリング監視）。
+- `node_modules` は Docker の名前付きボリューム（`node_modules`）で管理し、ホスト（macOS 等）のネイティブバイナリと混ざらないよう分離しています。
+- 依存は `package-lock.json` に固定されています。イメージのビルド時は `npm ci`、コンテナ起動時は `npm install` でロックファイルと同期するため、依存を追加した場合はコンテナを再起動すれば反映されます。
+
+| ファイル | 役割 |
+| --- | --- |
+| `Dockerfile` | Node 22 Alpine イメージ。依存のインストールと、起動コマンド（`npm install` → `npm run dev`）を定義 |
+| `docker-compose.yml` | ポート公開・ソースのマウント・`node_modules` ボリューム・ファイル監視の設定 |
+| `.dockerignore` | `node_modules` / `dist` / `.git` などをビルド対象から除外 |
+| `vite.config.ts` | 開発サーバーの待ち受け設定（ホストは `DEV_SERVER_HOST`、ポートは `DEV_SERVER_PORT`、`strictPort`） |
+
+開発サーバーは **ポート 5173 で、localhost（127.0.0.1）からのリクエストのみ** を受け付けます。同じネットワーク上の他の端末からはアクセスできません。5173 番が使用中の場合は、別ポートへずれずにエラーになります。
+
+| 起動方法 | 待ち受け | ブラウザで開くURL |
+| --- | --- | --- |
+| `docker compose up` | ホストの `127.0.0.1:5173` → コンテナの 5173（コンテナ内は `0.0.0.0`） | http://localhost:5173 |
+| `npm run dev`（Docker なし） | `127.0.0.1:5173` | http://localhost:5173 |
 
 事前要件：Docker および Docker Compose がインストールされていること。
 
