@@ -1,4 +1,5 @@
-import { formatCompactNumber } from '@/src/features/analysis/charts/chartRecommendationEngine';
+import { formatCompactNumber } from '../formatters';
+import { GRANULARITY_PERIOD_LABELS } from '../granularity';
 import type {
   CategoryMetricComparison,
   ChartConfig,
@@ -74,12 +75,7 @@ export function generateInsights(input: InsightEngineInput): Insight[] {
 
   // 2. Trend インサイト（時系列分析結果がある場合）
   for (const trend of trends.slice(0, 2)) {
-    const granLabel =
-      trend.granularity === 'day'
-        ? '日次'
-        : trend.granularity === 'week'
-          ? '週次'
-          : '月次';
+    const granLabel = GRANULARITY_PERIOD_LABELS[trend.granularity];
 
     if (
       trend.changeRate !== null &&
