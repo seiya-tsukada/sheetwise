@@ -33,7 +33,7 @@ export function AppHeader({
           }}
           className="font-display text-sm sm:text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
         >
-          CSV Intelligence Dashboard
+          Sheetwise
         </a>
 
         {hasDataset ? (
@@ -62,22 +62,7 @@ export function AppHeader({
               );
             })}
           </nav>
-        ) : (
-          <nav
-            aria-label="機能案内"
-            className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600"
-          >
-            <a href="#upload-zone" className="hover:text-slate-900 whitespace-nowrap shrink-0">
-              CSVアップロード
-            </a>
-            <a href="#sample-datasets" className="hover:text-slate-900 whitespace-nowrap shrink-0">
-              サンプル検証
-            </a>
-            <a href="#how-it-works" className="hover:text-slate-900 whitespace-nowrap shrink-0">
-              分析の仕組み
-            </a>
-          </nav>
-        )}
+        ) : null}
 
         <div className="flex items-center shrink-0">
           {hasDataset ? (
@@ -90,15 +75,7 @@ export function AppHeader({
               <span className="sm:hidden">CSV変更</span>
               <span className="hidden sm:inline">別のCSVを読み込む</span>
             </button>
-          ) : (
-            <a
-              href="#upload-zone"
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 sm:px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700 whitespace-nowrap shrink-0"
-            >
-              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>CSVを選択</span>
-            </a>
-          )}
+          ) : null}
         </div>
       </div>
 

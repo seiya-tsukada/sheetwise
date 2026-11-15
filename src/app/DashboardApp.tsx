@@ -5,6 +5,9 @@ import { SAMPLE_DATASETS } from '@/src/features/csv-import/services/sampleDatase
 import { DashboardWorkspace } from '@/src/features/dashboard/components/DashboardWorkspace';
 import { useDashboardState } from '@/src/features/dashboard/hooks/useDashboardState';
 
+const UPLOAD_PATH = '/';
+const RESULT_PATH = '/result';
+
 export function DashboardApp() {
   const {
     analysis,
@@ -49,6 +52,33 @@ export function DashboardApp() {
     }
   }, [handleLoadSampleDataset]);
 
+  // URL とデータセットの有無を同期する。
+  // 読み込み完了で /result へ進み、データが無い状態で /result にいれば / へ戻す
+  // （CSV はメモリ上にしか無いため、/result の直接アクセスやリロードでは復元できない）。
+  useEffect(() => {
+    const onResultPath = window.location.pathname === RESULT_PATH;
+    if (analysis && !onResultPath) {
+      window.history.pushState(null, '', RESULT_PATH);
+    } else if (!analysis && onResultPath) {
+      window.history.replaceState(null, '', UPLOAD_PATH);
+    }
+  }, [analysis]);
+
+  // ブラウザの戻る/進むに追従する。
+  useEffect(() => {
+    const handlePopState = () => {
+      const onResultPath = window.location.pathname === RESULT_PATH;
+      if (!onResultPath && analysis) {
+        setActiveTab('overview');
+        void handleResetToUpload();
+      } else if (onResultPath && !analysis) {
+        window.history.replaceState(null, '', UPLOAD_PATH);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [analysis, handleResetToUpload]);
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <AppHeader
@@ -56,6 +86,7 @@ export function DashboardApp() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         onResetToUpload={() => {
+          window.history.pushState(null, '', UPLOAD_PATH);
           setActiveTab('overview');
           void handleResetToUpload();
         }}
@@ -69,10 +100,6 @@ export function DashboardApp() {
             onSelectFile={(file) => {
               setActiveTab('overview');
               void handleUploadFile(file);
-            }}
-            onSelectSample={(id) => {
-              setActiveTab('overview');
-              void handleLoadSampleDataset(id);
             }}
             isLoading={isLoadingCsv}
             loadProgress={loadProgress}
