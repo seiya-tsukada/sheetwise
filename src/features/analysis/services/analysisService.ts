@@ -1,5 +1,6 @@
 import { duckdbClient } from '@/src/lib/duckdb/duckdbClient';
-import { buildChartQuery, buildTableQueries } from '@/src/lib/duckdb/queryBuilder';
+import { buildChartQuery } from '@/src/lib/duckdb/chartQueryBuilder';
+import { buildTableQueries } from '@/src/lib/duckdb/queryBuilder';
 import type { QueryExecutor } from '@/src/lib/duckdb/types';
 import type {
   AnalysisResult,
@@ -11,6 +12,7 @@ import type {
   TableQueryParams,
   TableQueryResult,
 } from '@/src/types/analysis';
+import { toChartData, toChartErrorResult } from '@/src/visualization/chartDataTransform';
 import { generateKpiCards, recommendCharts } from '../charts/chartRecommendationEngine';
 import { generateInsights } from '../insights/insightEngine';
 import { profileDataset } from '../profiling/dataProfiler';
@@ -153,96 +155,12 @@ export async function executeChartQuery(
   try {
     const sql = buildChartQuery(tableName, config, schema, filters);
     const rows = await executor.query<Record<string, unknown>>(sql);
-
-    if (config.type === 'scatter') {
-      const data = rows.map((r) => ({
-        x: Number(r.x_value ?? 0),
-        y: Number(r.y_value ?? 0),
-      }));
-      return {
-        chartId: config.id,
-        data,
-        seriesKeys: ['y'],
-        xAxisLabel: config.xAxis,
-        yAxisLabel: config.yAxis,
-      };
-    }
-
-    if (config.type === 'grouped_bar' && config.groupBy) {
-      const groupedMap = new Map<string, Record<string, string | number | null>>();
-      const groups = new Set<string>();
-
-      for (const r of rows) {
-        const xLabel = String(r.x_label ?? '(欠損)');
-        const gLabel = String(r.group_label ?? '(欠損)');
-        const val = Number(r.y_value ?? 0);
-        groups.add(gLabel);
-
-        let entry = groupedMap.get(xLabel);
-        if (!entry) {
-          entry = { name: xLabel };
-          groupedMap.set(xLabel, entry);
-        }
-        entry[gLabel] = val;
-      }
-
-      const seriesKeys = Array.from(groups);
-      const data = Array.from(groupedMap.values()).map((row) => {
-        for (const k of seriesKeys) {
-          if (row[k] === undefined) row[k] = 0;
-        }
-        return row;
-      });
-
-      return {
-        chartId: config.id,
-        data,
-        seriesKeys,
-        xAxisLabel: config.xAxis,
-        yAxisLabel: `${config.yAxis} (${config.aggregation})`,
-      };
-    }
-
-    const primaryKey =
-      config.aggregation === 'COUNT' && config.yAxis === '*'
-        ? '件数'
-        : `${config.yAxis} (${config.aggregation})`;
-
-    const seriesKeys = [primaryKey];
-    const secondaryKey = config.secondaryYAxis
-      ? `${config.secondaryYAxis} (${config.aggregation})`
-      : undefined;
-    if (secondaryKey) {
-      seriesKeys.push(secondaryKey);
-    }
-
-    const data = rows.map((r) => {
-      const item: Record<string, string | number | null> = {
-        name: String(r.x_label ?? '(欠損)'),
-        [primaryKey]: r.y_value === null ? 0 : Number(r.y_value),
-      };
-      if (secondaryKey) {
-        item[secondaryKey] = r.y_value_2 === null ? 0 : Number(r.y_value_2);
-      }
-      return item;
-    });
-
-    return {
-      chartId: config.id,
-      data,
-      seriesKeys,
-      xAxisLabel: config.xAxis,
-      yAxisLabel: primaryKey,
-    };
+    return toChartData(config, rows);
   } catch (err) {
-    return {
-      chartId: config.id,
-      data: [],
-      seriesKeys: [],
-      xAxisLabel: config.xAxis,
-      yAxisLabel: config.yAxis,
-      error: err instanceof Error ? err.message : 'グラフ集計クエリの実行に失敗しました',
-    };
+    return toChartErrorResult(
+      config,
+      err instanceof Error ? err.message : 'グラフ集計クエリの実行に失敗しました'
+    );
   }
 }
 

@@ -1,118 +1,120 @@
 import type { QueryExecutor } from '@/src/lib/duckdb/types';
-import { escapeIdentifier } from '@/src/lib/duckdb/queryBuilder';
-import type { ColumnRole, ColumnSchema, InferredDataType } from '@/src/types/analysis';
+import { dateExpr, escapeIdentifier, numericExpr } from '@/src/lib/duckdb/queryBuilder';
+import type { ColumnSchema, InferredDataType } from '@/src/types/analysis';
+import { inferColumnRole } from './roleRules';
+import { mapDuckdbType } from './typeRules';
 
-const ID_NAME_PATTERN =
-  /(^|[_\-\s])(id|uuid|code|cd|key|no|num|serial|sku|番号|コード|キー|品番)([_\-\s]|$)|(id|番号|コード)$/i;
+export { COLUMN_ROLE_RULES, ROLE_THRESHOLDS, inferColumnRole } from './roleRules';
+export { DUCKDB_TYPE_RULES, mapDuckdbType } from './typeRules';
 
-const METRIC_NAME_PATTERN =
-  /(sales|amount|revenue|price|cost|profit|margin|qty|quantity|count|total|sum|avg|score|rate|ratio|weight|height|duration|salary|budget|spend|ad|click|impression|conversion|age|stock|inventory|売上|金額|単価|数量|利益|原価|広告|費用|コスト|スコア|年齢|在庫|給与|年収|時間|点数|評価|件数|アクセス|クリック)/i;
+const SAMPLE_QUERY_LIMIT = 8;
+const SAMPLE_KEEP_COUNT = 4;
 
-const DATE_VALUE_PATTERN =
-  /^(\d{4}[-/]\d{1,2}[-/]\d{1,2}([T\s]\d{1,2}:\d{2}(:\d{2})?)?|\d{4}[-/]\d{1,2})$/;
+/**
+ * 文字列カラムを別の型へ昇格させるルール表。
+ * サンプル値すべてが `samplePattern` に一致した最初のルールだけを
+ * DuckDB 上で検証し、変換成功率が `minValidRatio` 以上なら採用する。
+ */
+interface CoercionRule {
+  kind: 'date' | 'numeric';
+  samplePattern: RegExp;
+  /** 変換を試みる SQL 式（列名から生成） */
+  castExpr: (columnName: string) => string;
+  promotedType: InferredDataType;
+  minValidRatio: number;
+}
 
-const NUMERIC_VALUE_PATTERN = /^-?[\d,]+(\.\d+)?$/;
+export const STRING_COERCION_RULES: readonly CoercionRule[] = [
+  {
+    kind: 'date',
+    samplePattern: /^(\d{4}[-/]\d{1,2}[-/]\d{1,2}([T\s]\d{1,2}:\d{2}(:\d{2})?)?|\d{4}[-/]\d{1,2})$/,
+    castExpr: (name) => dateExpr(name),
+    promotedType: 'Date',
+    minValidRatio: 0.85,
+  },
+  {
+    kind: 'numeric',
+    samplePattern: /^-?[\d,]+(\.\d+)?$/,
+    castExpr: (name) => numericExpr(name),
+    promotedType: 'Float',
+    minValidRatio: 0.85,
+  },
+];
 
-export function mapDuckdbType(duckdbType: string): InferredDataType {
-  const upper = duckdbType.toUpperCase();
-  if (
-    upper.includes('INT') ||
-    upper.includes('BIGINT') ||
-    upper.includes('SMALLINT') ||
-    upper.includes('TINYINT') ||
-    upper.includes('HUGEINT')
-  ) {
-    return 'Integer';
+interface ColumnBasics {
+  nullCount: number;
+  uniqueCount: number;
+  sampleValues: string[];
+}
+
+async function fetchColumnBasics(
+  executor: QueryExecutor,
+  tbl: string,
+  ident: string
+): Promise<ColumnBasics> {
+  let nullCount = 0;
+  let uniqueCount = 0;
+  let sampleValues: string[] = [];
+
+  try {
+    const statRows = await executor.query<{ null_cnt: number; uniq_cnt: number }>(`
+      SELECT
+        COUNT(*) - COUNT(${ident}) AS null_cnt,
+        COUNT(DISTINCT ${ident}) AS uniq_cnt
+      FROM ${tbl}
+    `);
+    nullCount = Number(statRows[0]?.null_cnt ?? 0);
+    uniqueCount = Number(statRows[0]?.uniq_cnt ?? 0);
+  } catch {
+    // 統計取得に失敗した場合は 0 のまま扱う
   }
-  if (
-    upper.includes('DOUBLE') ||
-    upper.includes('FLOAT') ||
-    upper.includes('DECIMAL') ||
-    upper.includes('NUMERIC') ||
-    upper.includes('REAL')
-  ) {
-    return 'Float';
+
+  try {
+    const sampleRows = await executor.query<{ val: unknown }>(`
+      SELECT DISTINCT CAST(${ident} AS VARCHAR) AS val
+      FROM ${tbl}
+      WHERE ${ident} IS NOT NULL
+      LIMIT ${SAMPLE_QUERY_LIMIT}
+    `);
+    sampleValues = sampleRows
+      .map((r) => (r.val === null || r.val === undefined ? '' : String(r.val)))
+      .filter((v) => v.length > 0);
+  } catch {
+    // サンプル取得に失敗した場合は空のまま扱う
   }
-  if (upper.includes('BOOL')) {
-    return 'Boolean';
-  }
-  if (upper === 'DATE') {
-    return 'Date';
-  }
-  if (upper.includes('TIMESTAMP') || upper.includes('TIME')) {
-    return 'Timestamp';
-  }
-  if (upper.includes('VARCHAR') || upper.includes('TEXT') || upper.includes('CHAR')) {
-    return 'String';
-  }
-  return 'Unknown';
+
+  return { nullCount, uniqueCount, sampleValues };
 }
 
 /**
- * カラムの型・名称・カーディナリティから分析上の役割を推定する（純粋関数）
+ * 文字列カラムがサンプル的に日付/数値らしければ、DuckDB で変換成功率を検証して型を昇格する
  */
-export function inferColumnRole(input: {
-  name: string;
-  dataType: InferredDataType;
-  rowCount: number;
-  uniqueCount: number;
-  uniqueRate: number;
-  isDateCoercible?: boolean;
-  isNumericCoercible?: boolean;
-}): ColumnRole {
-  const { name, dataType, rowCount, uniqueCount, uniqueRate, isDateCoercible, isNumericCoercible } =
-    input;
+async function detectStringCoercion(
+  executor: QueryExecutor,
+  tbl: string,
+  columnName: string,
+  sampleValues: string[]
+): Promise<CoercionRule | null> {
+  const samples = sampleValues.map((v) => v.trim()).filter((v) => v.length > 0);
+  if (samples.length === 0) return null;
 
-  if (dataType === 'Date' || dataType === 'Timestamp' || isDateCoercible) {
-    return 'date';
+  // サンプルに一致した最初のルールのみ検証する（日付に見える列を数値として再検証しない）
+  const rule = STRING_COERCION_RULES.find((r) => samples.every((v) => r.samplePattern.test(v)));
+  if (!rule) return null;
+
+  try {
+    const rows = await executor.query<{ valid_cnt: number; non_null_cnt: number }>(`
+      SELECT
+        COUNT(${rule.castExpr(columnName)}) AS valid_cnt,
+        COUNT(${escapeIdentifier(columnName)}) AS non_null_cnt
+      FROM ${tbl}
+    `);
+    const validCnt = Number(rows[0]?.valid_cnt ?? 0);
+    const nonNullCnt = Number(rows[0]?.non_null_cnt ?? 0);
+    return nonNullCnt > 0 && validCnt / nonNullCnt >= rule.minValidRatio ? rule : null;
+  } catch {
+    return null;
   }
-
-  if (dataType === 'Boolean') {
-    return 'boolean';
-  }
-
-  const looksLikeIdByName = ID_NAME_PATTERN.test(name.trim());
-  const looksLikeMetricByName = METRIC_NAME_PATTERN.test(name.trim());
-
-  if (looksLikeIdByName && !looksLikeMetricByName) {
-    return 'id';
-  }
-
-  if (dataType === 'Integer' || dataType === 'Float' || isNumericCoercible) {
-    // 整数でほぼ全行ユニーク（かつ行数10件以上）で、明確な指標名でない場合はID候補とみなす
-    if (
-      dataType === 'Integer' &&
-      rowCount >= 10 &&
-      uniqueRate >= 0.96 &&
-      !looksLikeMetricByName
-    ) {
-      return 'id';
-    }
-    // 2値のみの整数フラグ（0/1等）で指標名でない場合
-    if (dataType === 'Integer' && uniqueCount <= 2 && !looksLikeMetricByName) {
-      return 'boolean';
-    }
-    return 'metric';
-  }
-
-  if (dataType === 'String') {
-    if (looksLikeIdByName) {
-      return 'id';
-    }
-    if (uniqueCount <= 2 && rowCount >= 5) {
-      return 'boolean';
-    }
-    // 高カーディナリティ文字列（行数の85%以上ユニークかつ20種以上）はIDまたは自由テキスト
-    if (rowCount >= 10 && uniqueRate >= 0.85 && uniqueCount >= 20) {
-      return uniqueRate >= 0.98 && !/\s/.test(name) ? 'id' : 'text';
-    }
-    if (uniqueCount > 60 && uniqueRate > 0.5) {
-      return 'text';
-    }
-    return 'category';
-  }
-
-  return 'category';
 }
 
 export async function detectSchema(
@@ -130,88 +132,21 @@ export async function detectSchema(
   const schemas: ColumnSchema[] = [];
 
   for (const col of columns) {
-    const ident = escapeIdentifier(col.name);
-    let nullCount = 0;
-    let uniqueCount = 0;
-    let sampleValues: string[] = [];
+    const { nullCount, uniqueCount, sampleValues } = await fetchColumnBasics(
+      executor,
+      tbl,
+      escapeIdentifier(col.name)
+    );
 
-    try {
-      const statRows = await executor.query<{ null_cnt: number; uniq_cnt: number }>(`
-        SELECT
-          COUNT(*) - COUNT(${ident}) AS null_cnt,
-          COUNT(DISTINCT ${ident}) AS uniq_cnt
-        FROM ${tbl}
-      `);
-      nullCount = Number(statRows[0]?.null_cnt ?? 0);
-      uniqueCount = Number(statRows[0]?.uniq_cnt ?? 0);
-    } catch {
-      nullCount = 0;
-      uniqueCount = 0;
-    }
+    const baseType = mapDuckdbType(col.type);
+    const coercion =
+      baseType === 'String'
+        ? await detectStringCoercion(executor, tbl, col.name, sampleValues)
+        : null;
 
-    try {
-      const sampleRows = await executor.query<{ val: unknown }>(`
-        SELECT DISTINCT CAST(${ident} AS VARCHAR) AS val
-        FROM ${tbl}
-        WHERE ${ident} IS NOT NULL
-        LIMIT 8
-      `);
-      sampleValues = sampleRows
-        .map((r) => (r.val === null || r.val === undefined ? '' : String(r.val)))
-        .filter((v) => v.length > 0);
-    } catch {
-      sampleValues = [];
-    }
-
-    let dataType = mapDuckdbType(col.type);
-    let isDateCoercible = false;
-    let isNumericCoercible = false;
-
-    // 文字列カラムでも日付や数値として変換可能かチェックする
-    if (dataType === 'String' && sampleValues.length > 0) {
-      const nonEmptySamples = sampleValues.filter((v) => v.trim().length > 0);
-      if (
-        nonEmptySamples.length > 0 &&
-        nonEmptySamples.every((v) => DATE_VALUE_PATTERN.test(v.trim()))
-      ) {
-        try {
-          const dateCheck = await executor.query<{ valid_cnt: number; non_null_cnt: number }>(`
-            SELECT
-              COUNT(TRY_CAST(REPLACE(CAST(${ident} AS VARCHAR), '/', '-') AS TIMESTAMP)) AS valid_cnt,
-              COUNT(${ident}) AS non_null_cnt
-            FROM ${tbl}
-          `);
-          const validCnt = Number(dateCheck[0]?.valid_cnt ?? 0);
-          const nonNullCnt = Number(dateCheck[0]?.non_null_cnt ?? 0);
-          if (nonNullCnt > 0 && validCnt / nonNullCnt >= 0.85) {
-            isDateCoercible = true;
-            dataType = 'Date';
-          }
-        } catch {
-          // ignore
-        }
-      } else if (
-        nonEmptySamples.length > 0 &&
-        nonEmptySamples.every((v) => NUMERIC_VALUE_PATTERN.test(v.trim()))
-      ) {
-        try {
-          const numCheck = await executor.query<{ valid_cnt: number; non_null_cnt: number }>(`
-            SELECT
-              COUNT(TRY_CAST(REPLACE(CAST(${ident} AS VARCHAR), ',', '') AS DOUBLE)) AS valid_cnt,
-              COUNT(${ident}) AS non_null_cnt
-            FROM ${tbl}
-          `);
-          const validCnt = Number(numCheck[0]?.valid_cnt ?? 0);
-          const nonNullCnt = Number(numCheck[0]?.non_null_cnt ?? 0);
-          if (nonNullCnt > 0 && validCnt / nonNullCnt >= 0.85) {
-            isNumericCoercible = true;
-            dataType = 'Float';
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
+    const dataType = coercion?.promotedType ?? baseType;
+    const isDateCoercible = coercion?.kind === 'date';
+    const isNumericCoercible = coercion?.kind === 'numeric';
 
     const nullRate = totalRows > 0 ? nullCount / totalRows : 0;
     const nonNullRows = Math.max(0, totalRows - nullCount);
@@ -237,7 +172,7 @@ export async function detectSchema(
       nullRate,
       uniqueCount,
       uniqueRate,
-      sampleValues: sampleValues.slice(0, 4),
+      sampleValues: sampleValues.slice(0, SAMPLE_KEEP_COUNT),
       isDateCoercible,
       isNumericCoercible,
     });

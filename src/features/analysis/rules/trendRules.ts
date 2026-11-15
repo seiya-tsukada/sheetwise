@@ -3,6 +3,7 @@ import {
   buildWhereClause,
   dateExpr,
   numericExpr,
+  periodLabelExpr,
 } from '@/src/lib/duckdb/queryBuilder';
 import type {
   ColumnSchema,
@@ -99,12 +100,7 @@ export async function analyzeTrends(
   const granularity = dateProf?.recommendedGranularity ?? 'month';
 
   const dExpr = dateExpr(primaryDateCol.name, schema);
-  const periodSql =
-    granularity === 'day'
-      ? `STRFTIME(DATE_TRUNC('day', ${dExpr}), '%Y-%m-%d')`
-      : granularity === 'week'
-        ? `STRFTIME(DATE_TRUNC('week', ${dExpr}), '%Y-%m-%d')`
-        : `STRFTIME(DATE_TRUNC('month', ${dExpr}), '%Y-%m')`;
+  const periodSql = periodLabelExpr(granularity, dExpr);
 
   const whereClause = buildWhereClause(filters, schema);
   const andPrefix = whereClause ? `${whereClause} AND` : 'WHERE';

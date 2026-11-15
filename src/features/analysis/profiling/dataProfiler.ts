@@ -1,3 +1,4 @@
+import { recommendGranularity } from '../granularity';
 import type { QueryExecutor } from '@/src/lib/duckdb/types';
 import {
   buildWhereClause,
@@ -206,8 +207,7 @@ export async function profileDataset(
 
       const row = res[0];
       const spanDays = Math.max(0, Number(row?.span_days ?? 0));
-      const recommendedGranularity: 'day' | 'week' | 'month' =
-        spanDays <= 45 ? 'day' : spanDays <= 180 ? 'week' : 'month';
+      const recommendedGranularity = recommendGranularity(spanDays);
 
       dateProfiles[col.name] = {
         columnName: col.name,

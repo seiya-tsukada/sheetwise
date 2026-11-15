@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { buildChartQuery } from './chartQueryBuilder';
 import {
-  buildChartQuery,
   buildTableQueries,
   buildWhereClause,
   escapeIdentifier,
