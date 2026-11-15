@@ -1,0 +1,6 @@
+{
+  "name": "CSV Intelligence Dashboard",
+  "description": "ローカルCSVファイルをブラウザ内のDuckDB-Wasmで自律的に分析し、データ概要・インサイト・可視化ダッシュボードを自動生成する分析ツール",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
