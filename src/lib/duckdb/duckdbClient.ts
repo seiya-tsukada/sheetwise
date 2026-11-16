@@ -53,6 +53,28 @@ export function translateSqlError(err: unknown): string {
   return `分析クエリの実行中にエラーが発生しました: ${raw}`;
 }
 
+/**
+ * 利用者向けの日本語メッセージに加えて、DuckDBの元エラーメッセージを保持する
+ */
+export class SqlExecutionError extends Error {
+  readonly rawMessage: string;
+  constructor(message: string, rawMessage: string) {
+    super(message);
+    this.name = 'SqlExecutionError';
+    this.rawMessage = rawMessage;
+  }
+}
+
+function toSqlExecutionError(err: unknown): SqlExecutionError {
+  const raw = err instanceof Error ? err.message : String(err);
+  return new SqlExecutionError(translateSqlError(err), raw);
+}
+
+export interface QueryColumn {
+  name: string;
+  type: string;
+}
+
 class DuckDBClient implements QueryExecutor {
   private connection: AsyncDuckDBConnection | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -75,6 +97,16 @@ class DuckDBClient implements QueryExecutor {
   }
 
   async query<T extends SqlRow = SqlRow>(sql: string): Promise<T[]> {
+    const { rows } = await this.queryWithColumns<T>(sql);
+    return rows;
+  }
+
+  /**
+   * 行に加えて結果の列名・Arrow型を返す（0行の結果でも列が分かる）
+   */
+  async queryWithColumns<T extends SqlRow = SqlRow>(
+    sql: string
+  ): Promise<{ columns: QueryColumn[]; rows: T[] }> {
     return this.enqueue(async () => {
       try {
         const conn = await this.getConnection();
@@ -92,9 +124,10 @@ class DuckDBClient implements QueryExecutor {
           }
           rows.push(obj as T);
         }
-        return rows;
+        const columns = fields.map((f) => ({ name: f.name, type: String(f.type) }));
+        return { columns, rows };
       } catch (err) {
-        throw new Error(translateSqlError(err));
+        throw toSqlExecutionError(err);
       }
     });
   }
@@ -105,7 +138,7 @@ class DuckDBClient implements QueryExecutor {
         const conn = await this.getConnection();
         await conn.query(sql);
       } catch (err) {
-        throw new Error(translateSqlError(err));
+        throw toSqlExecutionError(err);
       }
     });
   }
