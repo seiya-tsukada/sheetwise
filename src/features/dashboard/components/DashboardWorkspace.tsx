@@ -216,6 +216,8 @@ export function DashboardWorkspace({
 
           {/* データテーブル */}
           <DataTableView
+            tableName={analysis.fileInfo.tableName}
+            filters={filters}
             schema={analysis.schema}
             params={tableParams}
             result={tableResult}
@@ -266,6 +268,8 @@ export function DashboardWorkspace({
 
       {activeTab === 'table' && (
         <DataTableView
+            tableName={analysis.fileInfo.tableName}
+            filters={filters}
           schema={analysis.schema}
           params={tableParams}
           result={tableResult}

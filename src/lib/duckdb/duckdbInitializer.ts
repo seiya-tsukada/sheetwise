@@ -1,13 +1,15 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
 import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
+import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
+import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 
 let dbInstance: duckdb.AsyncDuckDB | null = null;
 let workerInstance: Worker | null = null;
 let initPromise: Promise<duckdb.AsyncDuckDB> | null = null;
 
 /**
- * DuckDB-Wasm（シングルスレッドMVP構成）をローカルアセットから初期化する
+ * DuckDB-Wasm（シングルスレッド、EH版／非対応ブラウザはMVP版）をローカルアセットから初期化する
  * CDNへの外部通信は一切行わない
  */
 export async function getOrInitDuckDB(): Promise<duckdb.AsyncDuckDB> {
@@ -25,10 +27,11 @@ export async function getOrInitDuckDB(): Promise<duckdb.AsyncDuckDB> {
           mainModule: mvpWasmUrl,
           mainWorker: mvpWorkerUrl,
         },
-        // シングルスレッドMVP構成を明示採用（EH/COIは使用しない）
+        // Wasm例外処理に対応したブラウザではEH版を使う（シングルスレッド、COIは使用しない）。
+        // MVP版はC++例外を捕捉できず、SQLエラーが "_setThrew is not defined" に化けてしまう。
         eh: {
-          mainModule: mvpWasmUrl,
-          mainWorker: mvpWorkerUrl,
+          mainModule: ehWasmUrl,
+          mainWorker: ehWorkerUrl,
         },
       };
 
@@ -43,6 +46,9 @@ export async function getOrInitDuckDB(): Promise<duckdb.AsyncDuckDB> {
       const logger = new duckdb.VoidLogger();
       const db = new duckdb.AsyncDuckDB(logger, worker);
       await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      // SUM(BIGINT) の HUGEINT や DECIMAL 列は Arrow の Decimal になり、
+      // JS側でスケールが失われるため数値（double）として受け取る
+      await db.open({ query: { castDecimalToDouble: true } });
       dbInstance = db;
       return db;
     } catch (error) {
