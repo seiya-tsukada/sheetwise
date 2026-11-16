@@ -82,7 +82,7 @@ UIコンポーネント内にSQL文字列や分析ロジックを持たせず、
 ├── docker-compose.yml
 ├── .dockerignore
 ├── README.md
-├── sample/                    # 動作確認用サンプルCSV（sales_2025.csv）と生成スクリプト
+├── sample/                    # 動作確認用サンプルCSV（sales_2025.csv / hr_2025.csv）と生成スクリプト
 ├── scripts/
 │   └── test-hooks.mjs         # テスト時に Vite 専用の `?url` import をスタブ化する Node フック
 └── src/
@@ -328,7 +328,7 @@ npm test            # 単体テスト + スナップショット比較
   git diff src/features/analysis/__snapshots__/
   ```
 
-- 実データでの確認には `sample/sales_2025.csv` を使えます（想定される役割の一覧は `sample/README.md` を参照）。
+- 実データでの確認には `sample/sales_2025.csv`（売上）または `sample/hr_2025.csv`（組織人事）を使えます（想定される役割の一覧は `sample/README.md` を参照）。
 
 ---
 
